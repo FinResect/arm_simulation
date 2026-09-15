@@ -3,6 +3,9 @@ clc
 close all
 clear classes
 
+addpath('src/model')
+addpath('src/planning/')
+
 arm = ArmModel();
 fig = gcf;
 target = [0.5, 0.2, 0.2, 3.1, 0.0, 0.5];
