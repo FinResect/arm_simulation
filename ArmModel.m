@@ -6,22 +6,18 @@ classdef ArmModel < handle
 
         function obj = ArmModel()
             obj.robot = obj.arm_init();
+            obj.robot.plot(obj.q);
         end
 
         function arm_show(obj)
 
-            try
+            if (obj.is_first_show)
                 obj.robot.plot(obj.q);
-                drawnow;
-            catch exception
-
-                if contains(exception.message, "Invalid or deleted object")
-                    return;
-                end
-
-                rethrow(exception);
-
+                obj.is_first_show = false;
             end
+
+            obj.robot.animate(obj.q);
+            drawnow;
 
         end
 
@@ -102,6 +98,8 @@ classdef ArmModel < handle
     properties (Access = private)
         robot;
         q = [0, 0, 0, 0, 0, 0];
+
+        is_first_show = true;
 
     end
 
