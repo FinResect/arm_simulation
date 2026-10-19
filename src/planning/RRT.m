@@ -108,15 +108,15 @@ classdef RRT < handle
             if size(obj.qLim, 1) ~= 2
                 obj.qLim = obj.qLim.';
             end
-            obj.validate_configuration(obj.qStart, "current configuration");
-            if size(obj.qLim, 2) ~= numel(obj.qStart)
+            if size(obj.qLim, 1) ~= 2 || size(obj.qLim, 2) ~= numel(obj.qStart)
                 error("RRT:InvalidJointLimits", "Joint limits do not match the arm degrees of freedom.");
             end
+            obj.validate_configuration(obj.qStart, "current configuration");
         end
 
         function validate_configuration(obj, q, name)
-            if numel(q) ~= 6
-                error("RRT:InvalidConfiguration", "%s must contain six joint angles.", name);
+            if ~isreal(q) || numel(q) ~= numel(obj.qStart) || any(~isfinite(q(:)))
+                error("RRT:InvalidConfiguration", "%s must contain %d finite real joint angles.", name, numel(obj.qStart));
             end
             if any(q < obj.qLim(1, :) | q > obj.qLim(2, :))
                 error("RRT:OutOfBounds", "%s is outside the joint limits.", name);
@@ -127,7 +127,7 @@ classdef RRT < handle
             if rand() < obj.goalBias_
                 sample = qGoal;
             else
-                sample = obj.qLim(1, :) + rand(1, 6) .* (obj.qLim(2, :) - obj.qLim(1, :));
+                sample = obj.qLim(1, :) + rand(1, numel(obj.qStart)) .* (obj.qLim(2, :) - obj.qLim(1, :));
             end
         end
 
