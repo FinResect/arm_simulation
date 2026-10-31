@@ -26,14 +26,21 @@ use_parallel = true;
 progress_every = 100; % Report every N completed poses; 0 disables periodic reports.
 print_each_sample = false; % true prints PASS/FAIL and errors for every completed pose.
 show_solver_stages = true; % Show startup/IK stages until the first completion; all if print_each_sample.
-parallel_workers = 4; % Conservative default; increase after successful pool startup.
-base_height_range = [290, 490]; % Baseline height in mm; each pose may choose its own height.
+parallel_workers = 2; % Conservative default; increase after successful pool startup.
+base_height_range = [290, 430]; % Baseline height in mm; each pose may choose its own height.
 ik_seed = 0; % Per-pose random IK starts are identical in serial/parallel modes.
 R_cylinder_tool = eye(3); % Tool axes expressed in the cylinder frame.
 ik_attempts = 3;
 position_tolerance = 1e-4; % Metres.
 orientation_tolerance = 1e-3; % Radians.
 max_samples = 100000;
+
+% Structural search: shared d3/d5; all sampled orientations must pass.
+optimize_lengths = true; % false evaluates the current arm without searching.
+length_resolution_mm = 1; % Local refinement scale, not a global optimality bound.
+max_length_candidates = 100; % Computation budget, not a link-length bound.
+length_search_attempts = 8; % Extra IK starts reduce false rejection of candidates.
+length_checkpoint = fullfile(source_dir, '..', 'link_length_search.mat');
 
 %% Validate settings before creating figures or running IK
 range_values = {x_range, y_range, z_range, theta_range, phi_range, alpha_range};
@@ -74,16 +81,41 @@ fprintf('Position input unit: %s; solver and plot coordinates are in metres.\n',
 fprintf('Base lift range: %.0f-%.0f mm; each pose may use a different height.\n', ...
     base_height_range * 1000);
 timer_value = tic;
-result = core.evaluate(arm, ranges, [position_samples, orientations_per_position], ...
+evaluation_attempts = ik_attempts;
+if optimize_lengths
+    evaluation_attempts = max(ik_attempts, length_search_attempts);
+end
+evaluation_options = { ...
     'Sampling', 'random', ...
     'UseParallel', use_parallel, 'Workers', parallel_workers, 'IKSeed', ik_seed, ...
     'BaseHeightRange', base_height_range, ...
     'ProgressEvery', progress_every, 'PrintEachSample', print_each_sample, ...
     'ShowSolverStages', show_solver_stages, ...
-    'Attempts', ik_attempts, ...
+    'Attempts', evaluation_attempts, ...
     'PositionTolerance', position_tolerance, ...
     'OrientationTolerance', orientation_tolerance, ...
-    'MaxSamples', max_samples);
+    'MaxSamples', max_samples};
+
+if optimize_lengths
+    length_search = search_link_lengths(core, ranges, ...
+        [position_samples, orientations_per_position], ...
+        'InitialLengths', arm.get_link_lengths(), ...
+        'Resolution', length_resolution_mm / 1000, ...
+        'MaxCandidates', max_length_candidates, 'SampleSeed', random_seed, ...
+        'CheckpointFile', length_checkpoint, 'EvaluationOptions', evaluation_options);
+    if ~length_search.foundFeasible
+        fprintf('No all-pose feasible design found. Search details saved to %s.\n', length_checkpoint);
+        return;
+    end
+    result = length_search.bestResult;
+    arm = ArmModel('Show', false, 'LinkLengths', length_search.bestLengths);
+    fprintf('Shortest design found: d3 %.3f mm, d5 %.3f mm, sum %.3f mm.\n', ...
+        length_search.bestLengths * 1000, length_search.bestTotalLength * 1000);
+    fprintf('Search status: %s. This is not a proof of global optimality.\n', length_search.status);
+else
+    result = core.evaluate(arm, ranges, [position_samples, orientations_per_position], ...
+        evaluation_options{:});
+end
 
 fprintf('Valid IK solutions: %d / %d sampled poses.\n', ...
     nnz(result.success), numel(result.success));

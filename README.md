@@ -178,10 +178,53 @@ result = core.evaluate(arm, ranges, [1000, 20], ...
 若只有“attempt started”，表示该次优化调用尚未返回；并行等待提示仍每 5 秒输出。
 逐样本 PASS/FAIL 日志额外包含求得的基座高度（毫米），失败高度为 NaN。
 
+## 自动搜索杆长
+
+`src/main.m` 默认开启 `optimize_lengths = true`，自动调整 `L(3).d` 和 `L(5).d`，
+目标为两者总和最小。杆长对全部目标固定，每个目标仍可独立选择关节角和允许范围内的基座高度。
+设置 `optimize_lengths = false` 可只验证当前默认杆长。当前入口中的升降设置为 290–430 mm。
+
+```matlab
+optimize_lengths = true;
+length_resolution_mm = 1;
+max_length_candidates = 100;
+length_search_attempts = 8;
+```
+
+不设置人为的最大杆长，只要求非负，允许搜索零长度边界。
+先从当前杆长出发，若未找到全通过组合则扩大总长度搜索范围，并检查不同长度比例。
+找到总长度为 S 的可行组合后，只搜索 `d3 + d5 < S` 的区域。
+随后进行粗网格搜索和逐步减半步长的局部搜索，默认细化到 1 mm。
+该步长仅表示局部搜索尺度，不代表全局最优误差界，也不保证以 1 mm 整数输出。
+`MaxCandidates` 是计算预算，不是机械尺寸限制；达到预算可能尚未找到可行解或完成细化。
+
+所有候选使用相同的随机目标和逐目标逆解随机初值。先串行检查最多 8 个探测目标，
+包括此前失败的目标；通过探测后才调用完整评估，可复用 CPU 进程池并行验证全部目标。
+只有每个位置的每个采样姿态全部通过，才记录为最优可行组合。
+默认提高逆解尝试次数到 8，但探测或完整验证失败仍可能是局部收敛导致，不能据此证明不可达。
+探测阶段一次逆解期间没有心跳输出；完整评估阶段沿用原进度和等待提示。
+
+每完成一个候选，会将 `search` 保存到项目根目录的 `link_length_search.mat`，运行结束后也会保存最终状态。
+相同路径的旧搜索记录会被覆盖；该文件用于检查结果，不提供自动续跑。
+`length_search.bestLengths`、`bestTotalLength` 单位为米，`bestResult` 保存全部位姿的关节角、
+基座高度、误差和点云。`history` 各列依次为 d3、d5、完整验证通过数、是否全通过、累计秒数；
+探测拒绝时完整通过数为 NaN。`status` 区分预算耗尽、完成局部细化和零总长度。
+没有全通过组合时，`foundFeasible = false`、`bestResult` 为空，入口不会绘制误导性的最优结果。
+有可行组合时，即使预算耗尽也会输出并绘制当前找到的最短组合。
+搜索结果只针对固定采样点云，不证明连续范围全可达或数学上的全局最优，不包含碰撞和路径检查。
+
+也可手动指定模型杆长（米）：
+
+```matlab
+arm = ArmModel('Show', false, 'LinkLengths', [0.14804, 0.20508]);
+lengths = arm.get_link_lengths(); % [L(3).d, L(5).d]
+```
+
 ## 验证
 
 ```matlab
 addpath('tests');
+test_link_lengths; % 仅几何和参数检查，不运行逆解或开启并行池
 test_tech_core;
 test_parallel_evaluation; % 需要 Parallel Computing Toolbox，会启动或复用进程池
 ```

@@ -308,6 +308,7 @@ classdef TechCore < handle
             result.p_cylinder_tool = obj.p_cylinder_tool;
             result.positionTolerance = options.PositionTolerance;
             result.orientationTolerance = options.OrientationTolerance;
+            result.linkLengths = arm.get_link_lengths();
 
             function reportProgress(message)
                 % Runs on the client; message order follows completion, not sample index.

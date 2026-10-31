@@ -8,8 +8,10 @@ classdef ArmModel < handle
 
             arguments
                 options.Show (1, 1) logical = true
+                options.LinkLengths (1, 2) double {mustBeReal, mustBeFinite, mustBeNonnegative} = [0.14804, 0.20508]
             end
 
+            obj.linkLengths = options.LinkLengths;
             obj.robot = obj.arm_init();
 
             if options.Show
@@ -59,6 +61,10 @@ classdef ArmModel < handle
 
         function count = get_joint_count(obj)
             count = obj.robot.n;
+        end
+
+        function lengths = get_link_lengths(obj)
+            lengths = obj.linkLengths;
         end
 
         function positions = get_joint_positions(obj)
@@ -132,6 +138,7 @@ classdef ArmModel < handle
             if ~isempty(options.RandomStream) && ~isa(options.RandomStream, 'RandStream')
                 error('ArmModel:InvalidRandomStream', 'RandomStream must be a RandStream object or empty.');
             end
+
             if ~isempty(options.ProgressCallback) && ~isa(options.ProgressCallback, 'function_handle')
                 error('ArmModel:InvalidProgressCallback', 'ProgressCallback must be a function handle or empty.');
             end
@@ -172,15 +179,19 @@ classdef ArmModel < handle
                 if ~isempty(options.ProgressCallback)
                     options.ProgressCallback([1, 0, NaN, NaN, attempt, NaN]);
                 end
+
                 % Progress callbacks stay outside evalc so their output is never captured.
                 % Some RTB releases echo exitflag_ despite Display='off'.
                 solverOutput = evalc('[candidate, ~, exitFlag] = obj.robot.ikcon(targetPose, seed);');
                 solverOutput = regexprep(solverOutput, ...
                     '(^|\n)exitflag_ =\s*[-+]?\d+\s*(?=\n|$)', '');
+
                 if ~isempty(strtrim(solverOutput))
                     fprintf('%s', solverOutput);
                 end
+
                 info.attempts = attempt;
+
                 if ~isempty(options.ProgressCallback)
                     options.ProgressCallback([2, 0, NaN, NaN, attempt, exitFlag]);
                 end
@@ -230,7 +241,7 @@ classdef ArmModel < handle
             arguments
                 obj
                 targetScene (4, 4) double {mustBeReal, mustBeFinite}
-                heightRange (1, 2) double {mustBeReal, mustBeFinite, mustBeNonnegative} = [0.290, 0.490]
+                heightRange (1, 2) double {mustBeReal, mustBeFinite, mustBeNonnegative} = [0.290, 0.430]
                 options.Attempts (1, 1) double {mustBeReal, mustBeFinite, mustBeInteger, mustBePositive} = 3
                 options.PositionTolerance (1, 1) double {mustBeReal, mustBeFinite, mustBePositive} = 1e-4
                 options.OrientationTolerance (1, 1) double {mustBeReal, mustBeFinite, mustBePositive} = 1e-3
@@ -241,26 +252,31 @@ classdef ArmModel < handle
             if ~isempty(options.RandomStream) && ~isa(options.RandomStream, 'RandStream')
                 error('ArmModel:InvalidRandomStream', 'RandomStream must be a RandStream object or empty.');
             end
+
             if ~isempty(options.ProgressCallback) && ~isa(options.ProgressCallback, 'function_handle')
                 error('ArmModel:InvalidProgressCallback', 'ProgressCallback must be a function handle or empty.');
             end
 
             rotation = targetScene(1:3, 1:3);
+
             if norm(targetScene(4, :) - [0, 0, 0, 1]) > 1e-10 || ...
                     norm(rotation.' * rotation - eye(3), 'fro') > 1e-8 || ...
                     abs(det(rotation) - 1) > 1e-8
                 error("ArmModel:InvalidTransform", "The target must be a proper rigid transform.");
             end
+
             if heightRange(1) > heightRange(2)
                 error("ArmModel:InvalidHeightRange", "Height bounds must be ordered from minimum to maximum.");
             end
 
             count = obj.get_joint_count();
             limits = obj.get_joint_limits();
+
             if ~isnumeric(limits) || ~isreal(limits) || ~isequal(size(limits), [2, count]) || ...
                     any(~isfinite(limits(:))) || any(limits(1, :) > limits(2, :))
                 error("ArmModel:InvalidJointLimits", "Joint bounds must be finite, real, and ordered.");
             end
+
             obj.validate_joint_array(obj.q);
             lower = [limits(1, :), heightRange(1)];
             width = [limits(2, :), heightRange(2)] - lower;
@@ -280,26 +296,32 @@ classdef ArmModel < handle
             bestError = Inf;
 
             for attempt = 1:options.Attempts
+
                 if attempt == 1
                     seed = [obj.q, mean(heightRange)];
                 elseif attempt == 2
                     seed = [mean(limits, 1), mean(heightRange)];
                 else
+
                     if isempty(options.RandomStream)
                         randomValues = rand(1, count + 1);
                     else
                         randomValues = rand(options.RandomStream, 1, count + 1);
                     end
+
                     seed = lower + randomValues .* width;
                 end
+
                 seedScaled = (seed - lower) ./ scale;
 
                 if ~isempty(options.ProgressCallback)
                     options.ProgressCallback([1, 0, NaN, NaN, attempt, NaN]);
                 end
+
                 [candidateScaled, ~, exitFlag] = fmincon(objective, seedScaled, ...
                     [], [], [], [], zeros(1, count + 1), upperScaled, [], solverOptions);
                 info.attempts = attempt;
+
                 if ~isempty(options.ProgressCallback)
                     options.ProgressCallback([2, 0, NaN, NaN, attempt, exitFlag]);
                 end
@@ -309,6 +331,7 @@ classdef ArmModel < handle
                         any(~isfinite(candidateScaled(:)))
                     continue;
                 end
+
                 candidate = lower + reshape(candidateScaled, 1, []) .* width;
                 qCandidate = candidate(1:count);
                 height = candidate(end);
@@ -322,24 +345,28 @@ classdef ArmModel < handle
                 if any(~isfinite(actual(:))) || ~isfinite(positionError) || ~isfinite(orientationError)
                     continue;
                 end
+
                 success = isscalar(exitFlag) && isreal(exitFlag) && isfinite(exitFlag) && exitFlag > 0 && ...
                     all(qCandidate >= limits(1, :) & qCandidate <= limits(2, :)) && ...
                     height >= heightRange(1) && height <= heightRange(2) && ...
                     positionError <= options.PositionTolerance && orientationError <= options.OrientationTolerance;
                 residual = hypot(positionError / options.PositionTolerance, ...
                     orientationError / options.OrientationTolerance);
+
                 if ~isfinite(info.positionError) || residual < bestError || success
                     bestError = residual;
                     info.positionError = positionError;
                     info.orientationError = orientationError;
                     info.exitFlag = exitFlag;
                 end
+
                 if success
                     angle = qCandidate;
                     info.success = true;
                     info.baseHeight = height;
                     return;
                 end
+
             end
 
         end
@@ -422,9 +449,9 @@ classdef ArmModel < handle
         function arm = arm_config(obj)
             L(1) = Link('d', 0.056, 'a', 0, 'alpha', -pi / 2, 'offset', 0);
             L(2) = Link('d', 0, 'a', 0, 'alpha', pi / 2, 'offset', 0);
-            L(3) = Link('d', 0.24804 + 0.10903, 'a', 0.0655, 'alpha', -pi / 2, 'offset', 0);
+            L(3) = Link('d', obj.linkLengths(1), 'a', 0.0655, 'alpha', -pi / 2, 'offset', 0);
             L(4) = Link('d', 0, 'a', 0, 'alpha', -pi / 2, 'offset', -pi / 2);
-            L(5) = Link('d', 0.30508, 'a', 0, 'alpha', pi / 2, 'offset', pi / 2);
+            L(5) = Link('d', obj.linkLengths(2), 'a', 0, 'alpha', pi / 2, 'offset', pi / 2);
             L(6) = Link('d', 0, 'a', 0, 'alpha', pi / 2, 'offset', 0);
             L(7) = Link('d', 0, 'a', 0, 'alpha', 0, 'offset', pi / 2);
 
@@ -473,6 +500,7 @@ classdef ArmModel < handle
 
     properties (Access = private)
         robot;
+        linkLengths;
         q = [0, 0, 0, 0, 0, -pi / 2, 0];
 
         is_first_show = true;
@@ -490,7 +518,7 @@ function value = lift_transform_objective(x, robot, targetScene, lower, width, l
     candidate = lower + reshape(x, 1, []) .* width;
     height = candidate(end);
     baseScene = [-1, 0, 0, 0.1; 0, -1, 0, 0; 0, 0, 1, -height; 0, 0, 0, 1];
-    pose = robot.fkine(candidate(1:end-1));
+    pose = robot.fkine(candidate(1:end - 1));
     actual = baseScene \ pose.T;
     translationResidual = (actual(1:3, 4) - targetScene(1:3, 4)) / lengthScale;
     rotationResidual = actual(1:3, 1:3) - targetScene(1:3, 1:3);
